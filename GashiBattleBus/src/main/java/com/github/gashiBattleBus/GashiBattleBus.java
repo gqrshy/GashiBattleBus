@@ -27,11 +27,15 @@ import org.bukkit.scoreboard.Objective;
 import org.bukkit.scoreboard.Score;
 import org.bukkit.scoreboard.Scoreboard;
 import org.bukkit.scoreboard.ScoreboardManager;
+import org.bukkit.Sound;
 
 public class GashiBattleBus extends JavaPlugin implements Listener {
 
     // 試合に参加しているプレイヤーの UUID を管理
     private final Set<UUID> activePlayers = new HashSet<>();
+
+    // ファーストキルがすでに発生しているかどうかのフラグ（初期状態は false）
+    private boolean firstKillAwarded = false;
 
     private Scoreboard scoreboard;
     private Objective objective;
@@ -69,6 +73,9 @@ public class GashiBattleBus extends JavaPlugin implements Listener {
                 activePlayers.add(p.getUniqueId());
             }
 
+            // 試合開始時にファーストキルフラグをリセット
+            firstKillAwarded = false;
+
             // スコアボードの初期化
             setupScoreboard();
 
@@ -79,15 +86,17 @@ public class GashiBattleBus extends JavaPlugin implements Listener {
                 @Override
                 public void run() {
                     if (countdown > 0) {
-                        // ワールド内の全プレイヤーにタイトル表示
+                        // ワールド内の全プレイヤーにタイトル表示とサウンド再生
                         for (Player p : world.getPlayers()) {
                             p.sendTitle(ChatColor.RED + "" + countdown, "", 10, 20, 10);
+                            p.playSound(p.getLocation(), Sound.BLOCK_NOTE_BLOCK_PLING, 1.0f, 1.0f);
                         }
                         countdown--;
                     } else {
-                        // カウントダウン終了時に「GO!」を表示
+                        // カウントダウン終了時に「GO!」を表示とサウンド再生
                         for (Player p : world.getPlayers()) {
                             p.sendTitle(ChatColor.GREEN + "GO!", "", 10, 20, 10);
+                            p.playSound(p.getLocation(), Sound.ENTITY_PLAYER_LEVELUP, 1.0f, 1.0f);
                         }
                         // 試合開始処理
                         startBattleRoyale(world);
@@ -104,11 +113,9 @@ public class GashiBattleBus extends JavaPlugin implements Listener {
      * スコアボードのセットアップ
      */
     private void setupScoreboard() {
-        // スコアボード関連
         ScoreboardManager scoreboardManager = Bukkit.getScoreboardManager();
         scoreboard = scoreboardManager.getNewScoreboard();
 
-        // objective の登録。表示名は「残り人数」
         objective = scoreboard.registerNewObjective("br", "dummy", ChatColor.AQUA + "残り人数");
         objective.setDisplaySlot(DisplaySlot.SIDEBAR);
         updateScoreboard();
@@ -137,56 +144,38 @@ public class GashiBattleBus extends JavaPlugin implements Listener {
 
     /**
      * 試合開始処理
-     * ・ワールドボーダーの中心をスポーン地点に設定
-     * ・全プレイヤーを「降下開始地点」にテレポート（ここでは y=200 としています）
-     * ・エリトラ、ロケット花火、スローフォーリング効果を付与
-     * ・降下中を監視するタスクを開始
-     *
-     * @param world コマンド実行時のワールド
      */
     private void startBattleRoyale(World world) {
         Location spawn = world.getSpawnLocation();
-        // ワールドボーダーの中心とサイズを設定（例：サイズ 1000）
         world.getWorldBorder().setCenter(spawn);
-        world.getWorldBorder().setSize(1000);
+        world.getWorldBorder().setSize(1800);
 
-        // 試合参加プレイヤーに対して降下開始の設定
         for (Player player : world.getPlayers()) {
-            // 降下開始位置。スポーンの x,z を利用し、y は 200（必要に応じて調整可）
             Location dropLocation = new Location(world, spawn.getX(), 200, spawn.getZ());
             player.teleport(dropLocation);
 
-            // スローフォーリング効果（300 tick = 15秒）
             player.addPotionEffect(new PotionEffect(PotionEffectType.SLOW_FALLING, 300, 0));
 
-            // エリトラを装備
             player.getInventory().setChestplate(new ItemStack(Material.ELYTRA));
 
-            // ロケット花火を 5 個追加
             player.getInventory().addItem(new ItemStack(Material.FIREWORK_ROCKET, 5));
 
-            // 降下完了（地面に着地）を監視
             monitorPlayerFlight(player);
         }
     }
 
     /**
      * プレイヤーの着地を監視し、着地したらエリトラと花火を除去するタスク
-     *
-     * @param player 降下中のプレイヤー
      */
     private void monitorPlayerFlight(final Player player) {
         new BukkitRunnable() {
             @Override
             public void run() {
-                // プレイヤーが地面に着地していれば
                 if (player.isOnGround()) {
-                    // エリトラを除去（胸部スロットがエリトラの場合）
                     if (player.getInventory().getChestplate() != null &&
                             player.getInventory().getChestplate().getType() == Material.ELYTRA) {
                         player.getInventory().setChestplate(new ItemStack(Material.AIR));
                     }
-                    // 所持しているロケット花火をすべて除去
                     for (ItemStack item : player.getInventory().getContents()) {
                         if (item != null && item.getType() == Material.FIREWORK_ROCKET) {
                             player.getInventory().remove(item);
@@ -200,10 +189,6 @@ public class GashiBattleBus extends JavaPlugin implements Listener {
 
     /**
      * プレイヤー死亡時の処理
-     * ・試合参加プレイヤーリストから削除
-     * ・スコアボード更新
-     * ・倒された旨のメッセージ放送
-     * ・残りプレイヤーが 1 人になれば優勝者を発表
      */
     @EventHandler
     public void onPlayerDeath(PlayerDeathEvent event) {
@@ -211,17 +196,38 @@ public class GashiBattleBus extends JavaPlugin implements Listener {
         if (activePlayers.contains(dead.getUniqueId())) {
             activePlayers.remove(dead.getUniqueId());
             updateScoreboard();
-            Bukkit.broadcastMessage(ChatColor.RED + dead.getName() + " が倒されました！");
+            Bukkit.broadcastMessage(ChatColor.RED
+                    + dead.getName()
+                    + " が排除された！ 残り "
+                    + activePlayers.size()
+                    + " 名が生存している。");
         }
-        // 試合終了判定（残り 1 人または 0 人の場合）
-        if (activePlayers.size() <= 1 && activePlayers.size() > 0) {
+
+        // ファーストキルがまだ発生していなければ、キラーに特典を付与
+        Player killer = dead.getKiller();
+        if (!firstKillAwarded && killer != null) {
+            Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "give " + killer.getName() + " minecraft:diamond_sword 1");
+            firstKillAwarded = true;
+            Bukkit.broadcastMessage(ChatColor.GOLD + killer.getName() + " がファーストキルを取り、ボーナスアイテムを獲得しました！");
+        }
+
+        // 試合終了判定（残り1人または0人の場合）
+        if (activePlayers.size() == 1) {
             UUID winnerId = activePlayers.iterator().next();
             Player winner = Bukkit.getPlayer(winnerId);
             if (winner != null) {
                 Bukkit.broadcastMessage(ChatColor.GOLD + winner.getName() + " が優勝しました！");
             }
-        } else if (activePlayers.size() == 0) {
+            // 試合終了後にスコアボードをリセットする
+            for (Player p : Bukkit.getOnlinePlayers()) {
+                p.setScoreboard(Bukkit.getScoreboardManager().getMainScoreboard());
+            }
+        } else if (activePlayers.isEmpty()) {
             Bukkit.broadcastMessage(ChatColor.GOLD + "試合が終了しました！");
+            // 試合終了後にスコアボードをリセットする
+            for (Player p : Bukkit.getOnlinePlayers()) {
+                p.setScoreboard(Bukkit.getScoreboardManager().getMainScoreboard());
+            }
         }
     }
 }

@@ -8,6 +8,8 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.entity.CreatureSpawnEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 
+import java.util.Objects;
+
 public class ZombieHPFixer extends JavaPlugin implements Listener {
 
     @Override
@@ -18,9 +20,8 @@ public class ZombieHPFixer extends JavaPlugin implements Listener {
     @EventHandler
     public void onZombieSpawn(CreatureSpawnEvent event) {
         Entity entity = event.getEntity();
-        if (entity instanceof Zombie) {
-            Zombie zombie = (Zombie) entity;
-            zombie.getAttribute(Attribute.GENERIC_MAX_HEALTH).setBaseValue(7.0);
+        if (entity instanceof Zombie zombie) {
+            Objects.requireNonNull(zombie.getAttribute(Attribute.GENERIC_MAX_HEALTH)).setBaseValue(7.0);
             zombie.setHealth(7.0);
         }
     }
